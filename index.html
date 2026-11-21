@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pong</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; display: flex; align-items: center; justify-content: center; font-family: monospace; }
+  canvas { background: #000; border: 2px solid #444; max-width: 100%; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="500"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const PADDLE_W = 12, PADDLE_H = 80, BALL = 10, WIN_SCORE = 5;
+  const PLAYER_SPEED = 580, MAX_BALL_SPEED = 700;
+  const particles = [], trail = [];
+  let shake = 0;
+
+  function burst(x, y, color, n, spread) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, s = 40 + Math.random() * spread;
+      particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, color });
+    }
+  }
+
+  let state = 'start'; // start | playing | over
+  let player, cpu, ball, scores, winner, last = 0;
+  const keys = {};
+
+  const restartBtn = { x: W / 2 - 80, y: H / 2 + 40, w: 160, h: 44 };
+
+  function resetBall(dir) {
+    const angle = (Math.random() * 0.8 - 0.4);
+    const speed = 320;
+    ball = { x: W / 2, y: H / 2, vx: dir * speed * Math.cos(angle), vy: speed * Math.sin(angle) };
+  }
+
+  function newGame() {
+    player = { x: 20, y: H / 2 - PADDLE_H / 2 };
+    cpu = { x: W - 20 - PADDLE_W, y: H / 2 - PADDLE_H / 2 };
+    scores = { player: 0, cpu: 0 };
+    resetBall(Math.random() < 0.5 ? 1 : -1);
+    state = 'playing';
+  }
+
+  function hitPaddle(p, dir) {
+    if (ball.x + BALL / 2 > p.x && ball.x - BALL / 2 < p.x + PADDLE_W &&
+        ball.y + BALL / 2 > p.y && ball.y - BALL / 2 < p.y + PADDLE_H) {
+      const rel = (ball.y - (p.y + PADDLE_H / 2)) / (PADDLE_H / 2); // -1..1
+      const speed = Math.min(Math.hypot(ball.vx, ball.vy) * 1.06, MAX_BALL_SPEED);
+      const angle = rel * 0.9;
+      ball.vx = dir * speed * Math.cos(angle);
+      ball.vy = speed * Math.sin(angle);
+      ball.x = dir > 0 ? p.x + PADDLE_W + BALL / 2 : p.x - BALL / 2;
+      burst(ball.x, ball.y, dir > 0 ? '#4df' : '#f6a', 14, 220);
+      shake = 4;
+    }
+  }
+
+  function update(dt) {
+    for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt * 2.2; }
+    for (let i = particles.length - 1; i >= 0; i--) if (particles[i].life <= 0) particles.splice(i, 1);
+    shake = Math.max(0, shake - dt * 30);
+    if (state !== 'playing') { trail.length = 0; return; }
+    trail.push({ x: ball.x, y: ball.y });
+    if (trail.length > 14) trail.shift();
+    if (keys.ArrowUp) player.y -= PLAYER_SPEED * dt;
+    if (keys.ArrowDown) player.y += PLAYER_SPEED * dt;
+    player.y = Math.max(0, Math.min(H - PADDLE_H, player.y));
+
+    // CPU follows ball with limited speed
+    const target = ball.y - PADDLE_H / 2;
+    const diff = target - cpu.y;
+    const maxMove = 280 * dt;
+    cpu.y += Math.max(-maxMove, Math.min(maxMove, diff));
+    cpu.y = Math.max(0, Math.min(H - PADDLE_H, cpu.y));
+
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    if (ball.y < BALL / 2) { ball.y = BALL / 2; ball.vy = Math.abs(ball.vy); burst(ball.x, 0, '#fff', 6, 120); }
+    if (ball.y > H - BALL / 2) { ball.y = H - BALL / 2; ball.vy = -Math.abs(ball.vy); burst(ball.x, H, '#fff', 6, 120); }
+
+    if (ball.vx < 0) hitPaddle(player, 1); else hitPaddle(cpu, -1);
+
+    if (ball.x < -BALL) { burst(0, ball.y, '#f55', 30, 300); shake = 10; scores.cpu++; scored(1); }
+    else if (ball.x > W + BALL) { burst(W, ball.y, '#5f5', 30, 300); shake = 10; scores.player++; scored(-1); }
+  }
+
+  function scored(dir) {
+    if (scores.player >= WIN_SCORE || scores.cpu >= WIN_SCORE) {
+      winner = scores.player > scores.cpu ? 'You win!' : 'CPU wins!';
+      state = 'over';
+    } else {
+      resetBall(dir);
+    }
+  }
+
+  function text(str, x, y, size, align = 'center', color = '#fff') {
+    ctx.fillStyle = color;
+    ctx.font = `${size}px monospace`;
+    ctx.textAlign = align;
+    ctx.fillText(str, x, y);
+  }
+
+  function glow(color, blur) { ctx.shadowColor = color; ctx.shadowBlur = blur; }
+  function noGlow() { ctx.shadowBlur = 0; }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function paddle(p, color) {
+    glow(color, 20);
+    const g = ctx.createLinearGradient(p.x, 0, p.x + PADDLE_W, 0);
+    g.addColorStop(0, '#fff'); g.addColorStop(1, color);
+    ctx.fillStyle = g;
+    roundRect(p.x, p.y, PADDLE_W, PADDLE_H, 6);
+    ctx.fill();
+    noGlow();
+  }
+
+  function draw() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const bg = ctx.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, W * 0.7);
+    bg.addColorStop(0, '#14213d'); bg.addColorStop(1, '#03040a');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+    ctx.fillStyle = 'rgba(120,170,255,0.3)';
+    for (let y = 6; y < H; y += 24) ctx.fillRect(W / 2 - 2, y, 4, 12);
+
+    if (state === 'start') {
+      glow('#4df', 25);
+      text('PONG', W / 2, H / 2 - 40, 72, 'center', '#cfefff');
+      noGlow();
+      text('Up / Down arrows move your paddle', W / 2, H / 2 + 10, 20, 'center', '#aaa');
+      text(`First to ${WIN_SCORE} wins`, W / 2, H / 2 + 40, 20, 'center', '#aaa');
+      text('Press SPACE or ENTER to start', W / 2, H / 2 + 100, 24, 'center', '#ff0');
+      return;
+    }
+
+    paddle(player, '#4df');
+    paddle(cpu, '#f6a');
+
+    // ball trail
+    trail.forEach((t, i) => {
+      const f = i / trail.length;
+      ctx.fillStyle = `rgba(255,255,255,${f * 0.35})`;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, (BALL / 2) * f, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    glow('#fff', 22);
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, BALL / 2 + 1, 0, Math.PI * 2);
+    ctx.fill();
+    noGlow();
+
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+
+    glow('#4df', 14); text(scores.player, W / 2 - 60, 60, 48, 'center', '#dff6ff');
+    glow('#f6a', 14); text(scores.cpu, W / 2 + 60, 60, 48, 'center', '#ffe0ef');
+    noGlow();
+
+    if (state === 'over') {
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillRect(0, 0, W, H);
+      text('GAME OVER', W / 2, H / 2 - 60, 56);
+      text(winner, W / 2, H / 2 - 10, 28, 'center', '#ff0');
+      text(`${scores.player} - ${scores.cpu}`, W / 2, H / 2 + 20, 22, 'center', '#aaa');
+      const b = restartBtn;
+      glow('#4df', 18);
+      ctx.fillStyle = '#fff';
+      roundRect(b.x, b.y + 10, b.w, b.h, 10);
+      ctx.fill();
+      noGlow();
+      text('Restart', W / 2, b.y + 40, 24, 'center', '#000');
+    }
+  }
+
+  function loop(t) {
+    const dt = Math.min((t - last) / 1000, 0.05);
+    last = t;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('keydown', e => {
+    if (['ArrowUp', 'ArrowDown', ' '].includes(e.key)) e.preventDefault();
+    keys[e.key] = true;
+    if ((e.key === ' ' || e.key === 'Enter') && state !== 'playing') newGame();
+  });
+  window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+  canvas.addEventListener('click', e => {
+    const r = canvas.getBoundingClientRect();
+    const x = (e.clientX - r.left) * W / r.width;
+    const y = (e.clientY - r.top) * H / r.height;
+    const b = restartBtn;
+    if (state === 'over' && x >= b.x && x <= b.x + b.w && y >= b.y + 10 && y <= b.y + 10 + b.h) newGame();
+    else if (state === 'start') newGame();
+  });
+
+  requestAnimationFrame(t => { last = t; loop(t); });
+})();
+</script>
+</body>
+</html>
